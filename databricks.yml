@@ -89,6 +89,11 @@ resources:
     finops_lakebase:
       name: ${var.lakebase_instance}
       capacity: CU_1
+      # Explicit MANAGE for the deployer: the app's `database` binding is
+      # permission-checked against the deploying user at app create time.
+      permissions:
+        - level: CAN_MANAGE
+          user_name: ${workspace.current_user.userName}
 
   # The Genie space over the cost system tables — fully bundle-managed from
   # the versioned definition. Viewers ask it questions on their own
