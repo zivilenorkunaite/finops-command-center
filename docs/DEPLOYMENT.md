@@ -180,11 +180,29 @@ need. Option 1 edits the file listed; Option 2 sets the `customise.yaml` key
    `databricks.yml`). Pick target **dev** and press **Deploy**. The dialog
    shows the CLI version the workspace runs; it must be ≥ v1.3.0 (current
    workspaces are far newer).
-5. Start the app: press **▶ (run)** on the `finops` app resource in the
-   bundle resources pane (equivalent of `bundle run finops`).
-   Alternatively: **Compute → Apps → <app name> → Deploy**, source path
-   `…/.bundle/finops-command-center/files`.
+5. Start the app — **Deploy alone is not enough**. Deploy creates the
+   resources and syncs the source, so the app page shows compute *Active*
+   but status *Unavailable* with "No active deployment"; serving needs an
+   app deployment (the CLI's `bundle run finops`). From the workspace:
+   * In the **Bundle resources** pane, click the **run (play) icon** on the
+     `finops` app resource ("click the run (play) icon associated with any
+     resource to run it" — it may only appear when the row is hovered).
+   * No run icon at all? Per the docs, the resource has not deployed
+     successfully yet — press **Deploy** again once the log is clean, then
+     the icon appears.
+   * Fallback, identical result: **Compute → Apps → <app name> → Deploy**,
+     source code path
+     `/Workspace/Users/<you>/.bundle/finops-command-center/files`.
+   Repeat this run step after every Deploy that changes app source — and
+   allow ~2 minutes after "App started" for the SPA to build on the
+   container (`/api/*` serves immediately).
 6. Verify (section 5).
+
+Optional, to remove the run step entirely: Databricks Apps can deploy
+straight from a **private** Git repository with auto-deploy on push (app →
+git source + the Databricks GitHub app installed on the repo). Not
+configured in this bundle — resource changes would still need a panel
+Deploy.
 
 Not possible from the workspace UI: deploying to a *different* workspace —
 that needs the CLI or CI (add a production target with a `workspace.host` to
