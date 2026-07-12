@@ -101,6 +101,15 @@ app's `sql-warehouse` resource binding and app.yaml reads it back with
 `GENIE_SPACE_ID` from the `genie-space` binding. Never edit those two
 `valueFrom` env entries.
 
+**Shared workspaces:** `app_name` and `lakebase_instance` are
+workspace-global names. If another deployment of this bundle already exists
+in the workspace, reusing its instance name fails app creation with
+`PERMISSION_DENIED — User needs MANAGE permission on the resource` (binding
+a database instance requires managing it). Pick unique values for both —
+in the workspace flow that is three edits: `variables.app_name.default` and
+`variables.lakebase_instance.default` in databricks.yml, plus the matching
+`FINOPS_LAKEBASE_INSTANCE` in app.yaml.
+
 **Everything else is optional** — working defaults, override only what you
 need. Option 1 edits the file listed; Option 2 sets the `customise.yaml` key
 (deploy.sh writes it into the file for you):
@@ -108,6 +117,7 @@ need. Option 1 edits the file listed; Option 2 sets the `customise.yaml` key
 | Setting (default) | Option 1 — edit | `customise.yaml` key |
 |---|---|---|
 | App name (`finops-command-center`) | `databricks.yml` → `variables.app_name.default` | — (`--app` flag) |
+| Lakebase instance name (`finops-lakebase`) | `databricks.yml` → `variables.lakebase_instance.default` **and** `app.yaml` → `FINOPS_LAKEBASE_INSTANCE` (must match — the binding's `valueFrom` yields the Postgres host, not the name) | `lakebase_instance` (sets both) |
 | Customer label (display + Genie space title) | `app.yaml` → `FINOPS_CUSTOMER_NAME`; title: `databricks.yml` → `variables.customer_name.default` | `customer_name` |
 | App store (`lakebase`) | `app.yaml` → `FINOPS_APP_STORE` (+ `FINOPS_LAKEBASE_INSTANCE`, or `FINOPS_APP_CATALOG`/`FINOPS_APP_SCHEMA` for `uc`) | `app_store` etc. |
 | Feature flags (all `true`) | `app.yaml` → `FINOPS_FEATURE_GENIE` / `_AI_NARRATION` / `_DQM` | `features.*` |
