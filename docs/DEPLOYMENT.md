@@ -110,17 +110,55 @@ in the workspace flow that is three edits: `variables.app_name.default` and
 `variables.lakebase_instance.default` in databricks.yml, plus the matching
 `FINOPS_LAKEBASE_INSTANCE` in app.yaml.
 
-**Lakebase Autoscaling workspaces:** this bundle uses the *Provisioned*
-pairing (`database_instances` resource + the app's `database` binding). On
-workspaces running Lakebase **Autoscaling** (projects/branches), the same
-bundle creates a *project* under the hood and the `database` binding's
-MANAGE check then fails with the same `PERMISSION_DENIED` — even for the
-project's owner, no matter how long you wait. Until this repo supports the
-Autoscaling pairing (`postgres_projects` + app `postgres` binding), deploy
-on such workspaces with the UC store instead: remove the
-`database_instances` block and the app's `lakebase` binding from
-databricks.yml, set `FINOPS_APP_STORE: "uc"` + `FINOPS_APP_CATALOG`, and
-grant the app SP `USE CATALOG, CREATE SCHEMA` after the first deploy.
+**Lakebase Autoscaling workspaces:** this bundle defaults to the
+*Provisioned* pairing (`database_instances` resource + the app's `database`
+binding). On workspaces running Lakebase **Autoscaling**
+(projects/branches), that pairing creates a *project* under the hood and
+the `database` binding's MANAGE check fails with the same
+`PERMISSION_DENIED` — even for the project's owner, no matter how long you
+wait. On such workspaces swap to the Autoscaling pairing in databricks.yml
+(the app connects identically either way — it reads the injected `PG*` env
+vars):
+
+```yaml
+resources:
+  postgres_projects:
+    finops_pg:
+      project_id: ${var.lakebase_instance}
+      display_name: ${var.lakebase_instance}
+      pg_version: 17
+  postgres_branches:
+    finops_branch:
+      parent: ${resources.postgres_projects.finops_pg.id}
+      branch_id: finops
+      no_expiry: true
+  postgres_endpoints:
+    finops_endpoint:
+      parent: ${resources.postgres_branches.finops_branch.id}
+      endpoint_id: primary
+      endpoint_type: ENDPOINT_TYPE_READ_WRITE
+      autoscaling_limit_min_cu: 0.5
+      autoscaling_limit_max_cu: 2
+```
+
+replacing the `database_instances` block, and swap the app's `lakebase`
+binding to:
+
+```yaml
+        - name: lakebase
+          postgres:
+            branch: ${resources.postgres_branches.finops_branch.id}
+            database: databricks_postgres
+            permission: CAN_CONNECT_AND_CREATE
+```
+
+Do NOT declare a `permissions:` block on `postgres_projects` — a current
+CLI bug (databricks/cli#4818) fails those deploys; the deployer owns the
+project it creates, which satisfies the app binding's MANAGE-on-project
+check. Fallback if Lakebase is unavailable entirely: the UC store — remove
+the Lakebase resources and binding, set `FINOPS_APP_STORE: "uc"` +
+`FINOPS_APP_CATALOG`, and grant the app SP `USE CATALOG, CREATE SCHEMA`
+after the first deploy.
 
 **Everything else is optional** — working defaults, override only what you
 need. Option 1 edits the file listed; Option 2 sets the `customise.yaml` key

@@ -57,27 +57,48 @@ def _pg_connect():
     s = get_settings()
     instance = str(s.get("lakebase_instance") or "")
     dbname = str(s.get("lakebase_database") or "databricks_postgres")
-    if not instance:
-        raise LiveError("lakebase", "no FINOPS_LAKEBASE_INSTANCE configured")
     user = os.environ.get("DATABRICKS_CLIENT_ID", "")
     if not user:
         raise LiveError("lakebase", "no app service principal in the environment "
                                     "(DATABRICKS_CLIENT_ID) — Lakebase runs with app credentials")
-    try:
-        w = _app_client()
-        inst = w.database.get_database_instance(name=instance)
-        cred = w.database.generate_database_credential(
-            request_id=str(uuid.uuid4()), instance_names=[instance])
-        conn = psycopg.connect(
-            host=inst.read_write_dns, port=5432, dbname=dbname, user=user,
-            password=cred.token, sslmode="require", autocommit=True,
-            connect_timeout=15)
+
+    def _ready(conn):
         # The app's role can CREATE on the database but not in `public` —
         # keep everything in the app's own schema.
         with conn.cursor() as cur:
             cur.execute("CREATE SCHEMA IF NOT EXISTS finops")
             cur.execute("SET search_path TO finops")
         return conn
+
+    # Injected connection details: when the app carries a Lakebase resource
+    # binding — Provisioned instance OR Autoscaling project — the container
+    # gets standard libpq env vars. Authoritative when present (works on both
+    # Lakebase generations, no instance-name lookup); the app SP's OAuth
+    # token is the Postgres password either way.
+    pghost = os.environ.get("PGHOST", "")
+    if pghost:
+        try:
+            token = _app_client().config.oauth_token().access_token
+            return _ready(psycopg.connect(
+                host=pghost, port=int(os.environ.get("PGPORT") or 5432),
+                dbname=os.environ.get("PGDATABASE") or dbname,
+                user=os.environ.get("PGUSER") or user, password=token,
+                sslmode=os.environ.get("PGSSLMODE") or "require",
+                autocommit=True, connect_timeout=15))
+        except Exception as e:
+            raise LiveError("lakebase", f"cannot connect via injected PG env ({pghost}): {_redact(e)}")
+
+    if not instance:
+        raise LiveError("lakebase", "no injected PG env and no FINOPS_LAKEBASE_INSTANCE configured")
+    try:
+        w = _app_client()
+        inst = w.database.get_database_instance(name=instance)
+        cred = w.database.generate_database_credential(
+            request_id=str(uuid.uuid4()), instance_names=[instance])
+        return _ready(psycopg.connect(
+            host=inst.read_write_dns, port=5432, dbname=dbname, user=user,
+            password=cred.token, sslmode="require", autocommit=True,
+            connect_timeout=15))
     except LiveError:
         raise
     except Exception as e:

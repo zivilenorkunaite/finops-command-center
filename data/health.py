@@ -60,7 +60,9 @@ def preflight(warehouse_id: str) -> dict[str, Any]:
     if _store_is_lakebase():
         from data.config import get_settings
 
-        store_name = f"lakebase {get_settings().get('lakebase_instance')} (app credentials)"
+        import os
+        store_via = os.environ.get("PGHOST") or get_settings().get("lakebase_instance")
+        store_name = f"lakebase {store_via} (app credentials)"
         try:
             _pg_ensure()
             _pg_exec("SELECT 1", fetch=True)
