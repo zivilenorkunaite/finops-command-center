@@ -1,0 +1,79 @@
+# ===========================================================================
+# FinOps Command Center — per-customer configuration
+# ===========================================================================
+# ONBOARDING A CUSTOMER = EDIT THIS FILE ONLY. No code changes, ever.
+#
+# `deploy.sh` reads this file and writes the matching env vars into app.yaml.
+# The mapping is:
+#
+#   customer_name     -> FINOPS_CUSTOMER_NAME    (label shown in the UI)
+#                        + --var customer_name   (Genie space title)
+#   warehouse_id      -> --var warehouse_id      (bundle → sql-warehouse
+#                        binding → valueFrom in app.yaml; never written here)
+#   app_store         -> FINOPS_APP_STORE        (lakebase | uc — app state)
+#   lakebase_instance -> FINOPS_LAKEBASE_INSTANCE (Lakebase instance name)
+#   app_catalog       -> FINOPS_APP_CATALOG      (UC home, app_store: uc only)
+#   app_schema        -> FINOPS_APP_SCHEMA       (UC home, app_store: uc only)
+#   fx_aud            -> FINOPS_FX_AUD           (AUD = USD × rate; deploy-time
+#                        setting, shown next to the USD|AUD switch)
+#   llm_endpoint      -> FINOPS_LLM_ENDPOINT     (Claude endpoint for narration)
+#   features.*        -> FINOPS_FEATURE_*
+#
+# PRECEDENCE (highest first), enforced by data/config.py:
+#   1. Environment variable in app.yaml   (what deploy.sh writes from here)
+#   2. config.yaml
+#   3. Built-in default
+# ---------------------------------------------------------------------------
+
+# Display name shown in the app header / API. Cosmetic only.
+customer_name: "Energy for All"
+
+# SQL Warehouse ID for system-table reads. Small / Serverless is plenty.
+warehouse_id: ""
+
+# ---------------------------------------------------------------------------
+# App-state store — the ONLY place the app ever writes. Holds:
+#   workspace_scope     (Configuration-page workspace scope)
+#   workspace_universe  (stored workspace pick-list)
+#   qa_executions       (incremental query mirror)
+#   qa_analysis         (per-query AI advice)
+#   app_cache           (24h per-viewer object cache)
+#   tag_exclusions      (operator-excluded blanket tag keys)
+#   app_identity_map    (operator labels for app caller identities)
+#
+#   lakebase (default): a Lakebase managed-Postgres instance CREATED BY THE
+#     BUNDLE (databricks.yml); the app connects as its own service principal.
+#     Nothing is created in Unity Catalog.
+#   uc: Delta tables in <app_catalog>.<app_schema>. The app's service
+#     principal needs USE CATALOG + CREATE SCHEMA on the catalog. On
+#     metastores without root storage, create the catalog on an external
+#     location first:
+#       CREATE CATALOG <name> MANAGED LOCATION 's3://<ext-location>/<name>';
+# ---------------------------------------------------------------------------
+app_store: lakebase
+lakebase_instance: finops-lakebase
+app_catalog: main            # app_store: uc only
+app_schema: finops_cache     # app_store: uc only
+
+# ---------------------------------------------------------------------------
+# Feature flags. Off ⇒ surface hidden in the UI AND endpoint inert (404).
+# The cost-attribution pages (Genie $, AI $) are always on — no model calls.
+# ---------------------------------------------------------------------------
+features:
+  # All on. The Data Quality tab discovers monitors from their output tables
+  # and works without the system.data_quality_monitoring grant (statuses are
+  # simply absent until an account admin grants it).
+  genie: true
+  ai_narration: true
+  dqm: true
+
+# The Genie space is a BUNDLE RESOURCE (databricks.yml + resources/
+# finops_genie_space.json) — created/updated on every deploy, id injected into
+# the app automatically. Nothing to configure here.
+
+# FMAPI Claude endpoint for ai_narration. Only used when features.ai_narration=true.
+llm_endpoint: databricks-claude-sonnet-4-6
+
+# AUD FX rate (AUD = USD list price × fx_aud). Deploy-time setting — edit
+# and redeploy to change. Shown in the UI next to the USD|AUD switch.
+fx_aud: 1.52

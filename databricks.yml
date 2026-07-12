@@ -1,0 +1,157 @@
+# ===========================================================================
+# FinOps Command Center — Databricks Asset Bundle
+# ===========================================================================
+# Asset-Bundle-native deploy of the App into ANY workspace:
+#
+#     databricks bundle deploy [-t <target>]   # app resource + source sync
+#     databricks bundle run finops             # deploy + start the app
+#
+# Two equivalent ways to run those:
+#   · locally / CI: ./deploy.sh (reads customise.yaml → app.yaml env first)
+#   · entirely in the workspace, NO local CLI: put this repo in a Git folder
+#     and use the bundle panel (Deploy, then ▶ on the app resource). In that
+#     flow the ONE required edit is `variables.warehouse_id.default` below —
+#     the app reads it back through its sql-warehouse resource binding
+#     (valueFrom in app.yaml). Everything in app.yaml/config.yaml is optional
+#     overrides. See docs/DEPLOYMENT.md § "Deploy from the workspace".
+#
+# The SPA builds on the app container, never locally. The App is
+# scale-to-zero — it costs nothing while idle.
+# ---------------------------------------------------------------------------
+
+bundle:
+  name: finops-command-center
+  # Genie spaces deploy only with the direct deployment engine
+  # (default for new deployments since CLI v1.3.0).
+  engine: direct
+
+presets:
+  # Workspace-UI (Git folder) deploys default to "source-linked" mode, where
+  # resources point at the Git folder instead of copied files. The App needs
+  # real copies under ${workspace.root_path}/files — same as CLI deploys —
+  # so pin that behaviour for every deploy path.
+  source_linked_deployment: false
+
+# ---------------------------------------------------------------------------
+# Variables — overridable per target or with `--var key=value` at deploy time.
+# These map onto the customer-facing fields in customise.yaml.
+# ---------------------------------------------------------------------------
+variables:
+  app_name:
+    description: Databricks App name (must be unique in the target workspace).
+    default: finops-command-center
+  warehouse_id:
+    description: >-
+      SQL Warehouse ID for system-table reads — THE one required setting.
+      The app receives it automatically (sql-warehouse resource binding →
+      valueFrom in app.yaml), so this is its single source.
+    default: ""  # REQUIRED — set your workspace's warehouse id (docs/DEPLOYMENT.md §2)
+  customer_name:
+    description: >-
+      Customer label used in the Genie space title (the in-app label is
+      app.yaml's FINOPS_CUSTOMER_NAME). Cosmetic only.
+    default: "Energy for All"
+  llm_model:
+    description: >-
+      Claude model for optional LLM narration.
+    default: databricks-claude-sonnet-4-6
+  lakebase_instance:
+    description: >-
+      Lakebase (managed Postgres) instance holding the app's own state —
+      workspace scope, workspace universe and the Query Advisor cache.
+      Created by this bundle. Only used when app_store is "lakebase"
+      (the default in customise.yaml).
+    default: finops-lakebase
+
+# Deploy under the current user's workspace files by default; the app's
+# source_code_path points at this path's /files copy.
+workspace:
+  root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}
+
+# The Genie space definition (resources/finops_genie_space.json) is read at
+# deploy time and inlined into the genie_spaces resource. It deliberately does
+# NOT use the magic `.geniespace.json` suffix: with that suffix the workspace
+# materialises the synced file as a Genie node, which the Apps snapshot
+# importer cannot copy (and Git folders would render it as an asset). A
+# neutral name keeps it a plain file everywhere — no sync excludes needed.
+
+# ---------------------------------------------------------------------------
+# Resources — the App itself. The warehouse id and Genie space id flow to the
+# runtime through the app's resource bindings (valueFrom in app.yaml), so
+# they are defined only once, here. The remaining runtime config (labels,
+# feature flags, FX) lives in app.yaml `env` — optional overrides, written
+# declaratively from customise.yaml by deploy.sh in the local flow.
+# ---------------------------------------------------------------------------
+resources:
+  # App-state store (app_store: lakebase, the default) — smallest capacity;
+  # the app's tables are tiny. The app connects as its own service principal.
+  database_instances:
+    finops_lakebase:
+      name: ${var.lakebase_instance}
+      capacity: CU_1
+
+  # The Genie space over the cost system tables — fully bundle-managed from
+  # the versioned definition. Viewers ask it questions on their own
+  # permissions, hence CAN_RUN for all users.
+  genie_spaces:
+    finops_genie:
+      title: "${var.customer_name} — FinOps Cost Genie"
+      description: >-
+        Ask natural-language questions over the account's cost and query
+        system tables (billing usage, list prices, query history).
+      file_path: resources/finops_genie_space.json
+      warehouse_id: ${var.warehouse_id}
+      permissions:
+        - level: CAN_RUN
+          group_name: users
+
+  apps:
+    finops:
+      name: ${var.app_name}
+      description: >-
+        FinOps Command Center — Databricks-native cost-control co-pilot.
+        Consolidates access, workspace analysis, query advisor, storage/table
+        optimization, and cost governance over the account's system tables.
+      source_code_path: ${workspace.root_path}/files
+
+      # On-behalf-of-user, ONLY: the Apps proxy forwards each signed-in
+      # viewer's token (X-Forwarded-Access-Token) and every read runs with the
+      # VIEWER's own permissions. No table grants are created or modified at
+      # deploy time, and the app's service principal is never used for data —
+      # each viewer needs SELECT on the system tables (docs/DEPLOYMENT.md §1),
+      # CAN_USE on the warehouse and CAN_RUN on the Genie space.
+      user_api_scopes:
+        - sql
+        - dashboards.genie
+
+      resources:
+        # System tables are read through this SQL warehouse.
+        - name: sql-warehouse
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE
+        # Binding to the bundle-managed Genie space above; the app reads the
+        # space id from this resource (GENIE_SPACE_ID valueFrom in app.yaml).
+        - name: genie-space
+          genie_space:
+            name: genie-space
+            space_id: ${resources.genie_spaces.finops_genie.id}
+            permission: CAN_RUN
+        # App-state database: provisions the app SP's Postgres role on the
+        # Lakebase instance above. Referencing the resource (not the var)
+        # makes the instance a dependency, so it exists before the app binds.
+        - name: lakebase
+          database:
+            instance_name: ${resources.database_instances.finops_lakebase.name}
+            database_name: databricks_postgres
+            permission: CAN_CONNECT_AND_CREATE
+
+# ---------------------------------------------------------------------------
+# Targets. The workspace flow (Git folder + bundle panel) always deploys into
+# its own workspace; to deploy elsewhere from the CLI, add a production
+# target with a `workspace.host` and pick it with `-t <target>`.
+# ---------------------------------------------------------------------------
+targets:
+  dev:
+    default: true
+    mode: development

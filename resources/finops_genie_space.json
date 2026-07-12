@@ -1,0 +1,190 @@
+{
+  "version": 2,
+  "data_sources": {
+    "tables": [
+      {
+        "identifier": "system.access.table_lineage"
+      },
+      {
+        "identifier": "system.billing.list_prices"
+      },
+      {
+        "identifier": "system.billing.usage"
+      },
+      {
+        "identifier": "system.compute.clusters"
+      },
+      {
+        "identifier": "system.compute.warehouses"
+      },
+      {
+        "identifier": "system.information_schema.catalog_privileges"
+      },
+      {
+        "identifier": "system.information_schema.schema_privileges"
+      },
+      {
+        "identifier": "system.information_schema.table_privileges"
+      },
+      {
+        "identifier": "system.information_schema.tables"
+      },
+      {
+        "identifier": "system.lakeflow.jobs"
+      },
+      {
+        "identifier": "system.query.history"
+      },
+      {
+        "identifier": "system.storage.predictive_optimization_operations_history"
+      }
+    ]
+  },
+  "instructions": {
+    "text_instructions": [
+      {
+        "id": "5bea1116c34148baa6d208576debbb14",
+        "content": [
+          "All dollar figures are USD LIST price: usage_quantity * lp.pricing.effective_list.default. Join system.billing.usage u to system.billing.list_prices lp ON u.cloud = lp.cloud AND u.sku_name = lp.sku_name AND u.usage_start_time >= lp.price_start_time AND (lp.price_end_time IS NULL OR u.usage_start_time < lp.price_end_time). PERFORMANCE RULES: always constrain u.usage_date (default to the trailing 30 days: u.usage_date >= current_date() - INTERVAL 30 DAYS) \u2014 the usage table is very large; aggregate before joining; never SELECT *. billing_origin_product is the cost driver (SQL, JOBS, APPS, MODEL_SERVING, VECTOR_SEARCH, GENIE, ...). Billing spans every workspace in the account; workspace_id identifies each one. Cost-attribution tags live in u.custom_tags (untagged = custom_tags empty or NULL). Job cost: u.usage_metadata.job_id joins system.lakeflow.jobs on workspace_id + job_id \u2014 the jobs table is slowly changing, take the latest row per (workspace_id, job_id) by change_time (QUALIFY ROW_NUMBER() ... = 1). Warehouse cost: u.usage_metadata.warehouse_id joins system.compute.warehouses the same way (latest row per workspace_id + warehouse_id). Serverless vs classic: sku_name ILIKE '%SERVERLESS%'. Query performance questions use system.query.history (durations are milliseconds; avoid scanning statement_text unless explicitly asked). Genie's own usage is billed under billing_origin_product = 'GENIE'; the user is identity_metadata.run_as and usage_metadata.genie.surface splits it: GENIE_CODE (SQL editor / notebook assistant), GENIE_ONE (Genie Spaces chat), GENIE_AGENTS (agent calls). This is list price with no discounts or commitments \u2014 the Account Console invoice is authoritative. Never propose INSERT/UPDATE/DELETE; this space is read-only cost analytics.\n\nACCESS questions use the three privilege views: system.information_schema.table_privileges (columns grantee, privilege_type, table_catalog, table_schema, table_name, inherited_from), schema_privileges and catalog_privileges. 'Who has access to X' = UNION ALL of the three views filtered to the object; grantee is the principal (user email, group name, or a service-principal UUID); inherited_from <> 'NONE' means the grant came from a parent object rather than a direct grant. Exclude table_catalog/catalog_name IN ('system','samples') and names starting with '__databricks_internal' unless explicitly asked. INVENTORY questions ('how many tables', 'who owns X', 'what changed recently') use system.information_schema.tables (table_type: MANAGED, EXTERNAL, FOREIGN, VIEW, MATERIALIZED_VIEW, STREAMING_TABLE; table_owner; created; last_altered) with the same exclusions. DATA-ASSET USAGE ('most used tables', 'unused tables') uses system.access.table_lineage: COUNT(*) of events per source_table_full_name; ALWAYS constrain event_time (default trailing 30 days) \u2014 the table is very large. NEVER alias anything AS user ('user' is reserved); use genie_user.\n\nTAG questions: break spend down by tag with LATERAL VIEW explode(u.custom_tags) kv AS key, value (or map_keys/map_values); a usage row carrying several tags counts fully under each of its keys, so per-tag figures don't sum to total spend. COMPUTE HYGIENE: system.compute.warehouses and system.compute.clusters are slowly changing \u2014 take the latest row per (workspace_id, warehouse_id) or (workspace_id, cluster_id) by change_time with QUALIFY ROW_NUMBER() = 1 and keep delete_time IS NULL for live resources. A warehouse with auto_stop_minutes = 0 never auto-stops; an interactive cluster (cluster_source NOT IN ('JOB','PIPELINE','PIPELINE_MAINTENANCE')) with auto_termination_minutes NULL or 0 never auto-terminates. PREDICTIVE OPTIMIZATION: system.storage.predictive_optimization_operations_history records automatic COMPACTION / CLUSTERING / VACUUM per table (catalog_name, schema_name, table_name, operation_type, operation_status, start_time/end_time); filter operation_status = 'SUCCESSFUL' and always constrain start_time (default trailing 7 days)."
+        ]
+      }
+    ],
+    "example_question_sqls": [
+      {
+        "id": "04221ab94f3b4107a94f312918236a92",
+        "question": [
+          "Top 20 SQL warehouses by cost with names, last 30 days"
+        ],
+        "sql": [
+          "SELECT u.workspace_id, u.usage_metadata.warehouse_id AS warehouse_id, any_value(w.warehouse_name) AS warehouse_name, ROUND(SUM(u.usage_quantity*lp.pricing.effective_list.default),2) AS list_cost_usd FROM system.billing.usage u JOIN system.billing.list_prices lp ON u.cloud=lp.cloud AND u.sku_name=lp.sku_name AND u.usage_start_time>=lp.price_start_time AND (lp.price_end_time IS NULL OR u.usage_start_time<lp.price_end_time) LEFT JOIN (SELECT workspace_id, warehouse_id, warehouse_name FROM system.compute.warehouses QUALIFY ROW_NUMBER() OVER (PARTITION BY workspace_id, warehouse_id ORDER BY change_time DESC)=1) w ON u.usage_metadata.warehouse_id=w.warehouse_id AND u.workspace_id=w.workspace_id WHERE u.usage_date>=current_date()-INTERVAL 30 DAYS AND u.usage_metadata.warehouse_id IS NOT NULL GROUP BY 1,2 ORDER BY list_cost_usd DESC LIMIT 20"
+        ]
+      },
+      {
+        "id": "2bce88700dde4d5ead7b6750f94f7da3",
+        "question": [
+          "Top Genie Code users by spend, last 30 days"
+        ],
+        "sql": [
+          "SELECT u.identity_metadata.run_as AS genie_user, ROUND(SUM(u.usage_quantity*lp.pricing.effective_list.default),2) AS list_cost_usd FROM system.billing.usage u JOIN system.billing.list_prices lp ON u.cloud=lp.cloud AND u.sku_name=lp.sku_name AND u.usage_start_time>=lp.price_start_time AND (lp.price_end_time IS NULL OR u.usage_start_time<lp.price_end_time) WHERE u.billing_origin_product='GENIE' AND COALESCE(u.usage_metadata.genie.surface,'')='GENIE_CODE' AND u.usage_date>=current_date()-INTERVAL 30 DAYS GROUP BY 1 ORDER BY list_cost_usd DESC LIMIT 10"
+        ]
+      },
+      {
+        "id": "4b9c462b530449ea8a590c900aad9253",
+        "question": [
+          "Spend by cost driver, last 30 days"
+        ],
+        "sql": [
+          "SELECT u.billing_origin_product, ROUND(SUM(u.usage_quantity*lp.pricing.effective_list.default),2) AS list_cost_usd FROM system.billing.usage u JOIN system.billing.list_prices lp ON u.cloud=lp.cloud AND u.sku_name=lp.sku_name AND u.usage_start_time>=lp.price_start_time AND (lp.price_end_time IS NULL OR u.usage_start_time<lp.price_end_time) WHERE u.usage_date>=current_date()-INTERVAL 30 DAYS GROUP BY 1 ORDER BY list_cost_usd DESC"
+        ]
+      },
+      {
+        "id": "4bcc35154d6d47bdac8b24eb88e8f4a8",
+        "question": [
+          "Untagged share of spend, last 30 days"
+        ],
+        "sql": [
+          "SELECT ROUND(SUM(CASE WHEN u.custom_tags IS NULL OR cardinality(map_keys(u.custom_tags))=0 THEN u.usage_quantity*lp.pricing.effective_list.default ELSE 0 END),2) AS untagged_usd, ROUND(SUM(u.usage_quantity*lp.pricing.effective_list.default),2) AS total_usd FROM system.billing.usage u JOIN system.billing.list_prices lp ON u.cloud=lp.cloud AND u.sku_name=lp.sku_name AND u.usage_start_time>=lp.price_start_time AND (lp.price_end_time IS NULL OR u.usage_start_time<lp.price_end_time) WHERE u.usage_date>=current_date()-INTERVAL 30 DAYS"
+        ]
+      },
+      {
+        "id": "68117f1f53b54ce0aefc03d6cb78432c",
+        "question": [
+          "Top 20 workspaces by spend, last 30 days"
+        ],
+        "sql": [
+          "SELECT u.workspace_id, ROUND(SUM(u.usage_quantity*lp.pricing.effective_list.default),2) AS list_cost_usd FROM system.billing.usage u JOIN system.billing.list_prices lp ON u.cloud=lp.cloud AND u.sku_name=lp.sku_name AND u.usage_start_time>=lp.price_start_time AND (lp.price_end_time IS NULL OR u.usage_start_time<lp.price_end_time) WHERE u.usage_date>=current_date()-INTERVAL 30 DAYS GROUP BY 1 ORDER BY list_cost_usd DESC LIMIT 20"
+        ]
+      },
+      {
+        "id": "735ac63a0294436ea2b80d57af7f1593",
+        "question": [
+          "Top 20 jobs by cost with names, last 30 days"
+        ],
+        "sql": [
+          "SELECT u.workspace_id, u.usage_metadata.job_id AS job_id, any_value(j.name) AS job_name, ROUND(SUM(u.usage_quantity*lp.pricing.effective_list.default),2) AS list_cost_usd FROM system.billing.usage u JOIN system.billing.list_prices lp ON u.cloud=lp.cloud AND u.sku_name=lp.sku_name AND u.usage_start_time>=lp.price_start_time AND (lp.price_end_time IS NULL OR u.usage_start_time<lp.price_end_time) LEFT JOIN (SELECT workspace_id, job_id, name FROM system.lakeflow.jobs QUALIFY ROW_NUMBER() OVER (PARTITION BY workspace_id, job_id ORDER BY change_time DESC)=1) j ON u.usage_metadata.job_id=j.job_id AND u.workspace_id=j.workspace_id WHERE u.usage_date>=current_date()-INTERVAL 30 DAYS AND u.usage_metadata.job_id IS NOT NULL GROUP BY 1,2 ORDER BY list_cost_usd DESC LIMIT 20"
+        ]
+      },
+      {
+        "id": "7a1de4c1a42349a5a270dc6b1260a019",
+        "question": [
+          "Serverless vs classic spend split, last 30 days"
+        ],
+        "sql": [
+          "SELECT CASE WHEN u.sku_name ILIKE '%SERVERLESS%' THEN 'serverless' ELSE 'classic' END AS compute_kind, ROUND(SUM(u.usage_quantity*lp.pricing.effective_list.default),2) AS list_cost_usd FROM system.billing.usage u JOIN system.billing.list_prices lp ON u.cloud=lp.cloud AND u.sku_name=lp.sku_name AND u.usage_start_time>=lp.price_start_time AND (lp.price_end_time IS NULL OR u.usage_start_time<lp.price_end_time) WHERE u.usage_date>=current_date()-INTERVAL 30 DAYS GROUP BY 1"
+        ]
+      },
+      {
+        "id": "ac2f03f5f2a447cb8f692d6f7444c953",
+        "question": [
+          "Monthly spend trend, last 6 months"
+        ],
+        "sql": [
+          "SELECT date_format(date_trunc('MONTH',u.usage_date),'yyyy-MM') AS month, ROUND(SUM(u.usage_quantity*lp.pricing.effective_list.default),2) AS list_cost_usd FROM system.billing.usage u JOIN system.billing.list_prices lp ON u.cloud=lp.cloud AND u.sku_name=lp.sku_name AND u.usage_start_time>=lp.price_start_time AND (lp.price_end_time IS NULL OR u.usage_start_time<lp.price_end_time) WHERE u.usage_date>=add_months(date_trunc('MONTH',current_date()),-5) GROUP BY 1 ORDER BY 1"
+        ]
+      },
+      {
+        "id": "f1a00000000000000000000000000001",
+        "question": [
+          "Who has access to which catalogs?"
+        ],
+        "sql": [
+          "SELECT catalog_name, grantee AS principal, privilege_type, inherited_from FROM system.information_schema.catalog_privileges WHERE catalog_name NOT IN ('system','samples') AND catalog_name NOT LIKE '__databricks_internal%' ORDER BY catalog_name, principal"
+        ]
+      },
+      {
+        "id": "f1a00000000000000000000000000002",
+        "question": [
+          "Which principals hold ALL PRIVILEGES, and on what?"
+        ],
+        "sql": [
+          "SELECT grantee AS principal, table_catalog || '.' || table_schema || '.' || table_name AS securable, 'table' AS level FROM system.information_schema.table_privileges WHERE privilege_type = 'ALL PRIVILEGES' AND table_catalog NOT IN ('system','samples') UNION ALL SELECT grantee, catalog_name || '.' || schema_name, 'schema' FROM system.information_schema.schema_privileges WHERE privilege_type = 'ALL PRIVILEGES' AND catalog_name NOT IN ('system','samples') UNION ALL SELECT grantee, catalog_name, 'catalog' FROM system.information_schema.catalog_privileges WHERE privilege_type = 'ALL PRIVILEGES' AND catalog_name NOT IN ('system','samples') ORDER BY principal, securable"
+        ]
+      },
+      {
+        "id": "f1a00000000000000000000000000003",
+        "question": [
+          "What are the 10 most-read tables in the last 30 days?"
+        ],
+        "sql": [
+          "SELECT source_table_full_name AS table_name, COUNT(*) AS read_events FROM system.access.table_lineage WHERE event_time >= current_timestamp() - INTERVAL 30 DAYS AND source_table_full_name IS NOT NULL AND source_table_full_name NOT LIKE 'system.%' AND source_table_full_name NOT LIKE 'samples.%' AND source_table_full_name NOT LIKE '__databricks_internal%' GROUP BY 1 ORDER BY read_events DESC LIMIT 10"
+        ]
+      },
+      {
+        "id": "f1a00000000000000000000000000004",
+        "question": [
+          "How many tables are in each catalog?"
+        ],
+        "sql": [
+          "SELECT table_catalog, table_type, COUNT(*) AS num_objects FROM system.information_schema.tables WHERE table_catalog NOT IN ('system','samples') AND table_catalog NOT LIKE '__databricks_internal%' AND table_schema <> 'information_schema' GROUP BY table_catalog, table_type ORDER BY table_catalog, num_objects DESC"
+        ]
+      },
+      {
+        "id": "f1a00000000000000000000000000005",
+        "question": [
+          "Which tag keys carry the most spend, last 30 days?"
+        ],
+        "sql": [
+          "SELECT kv.key AS tag_key, ROUND(SUM(u.usage_quantity * lp.pricing.effective_list.default), 2) AS list_cost_usd, COUNT(DISTINCT kv.value) AS distinct_values FROM system.billing.usage u LEFT JOIN system.billing.list_prices lp ON u.cloud = lp.cloud AND u.sku_name = lp.sku_name AND u.usage_start_time >= lp.price_start_time AND (lp.price_end_time IS NULL OR u.usage_start_time < lp.price_end_time) LATERAL VIEW explode(u.custom_tags) kv AS key, value WHERE u.usage_date >= current_date() - INTERVAL 30 DAYS GROUP BY 1 ORDER BY list_cost_usd DESC LIMIT 20"
+        ]
+      },
+      {
+        "id": "f1a00000000000000000000000000006",
+        "question": [
+          "Which SQL warehouses never auto-stop?"
+        ],
+        "sql": [
+          "SELECT warehouse_name, warehouse_id, workspace_id, warehouse_size FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY workspace_id, warehouse_id ORDER BY change_time DESC) AS rn FROM system.compute.warehouses) WHERE rn = 1 AND delete_time IS NULL AND auto_stop_minutes = 0"
+        ]
+      },
+      {
+        "id": "f1a00000000000000000000000000007",
+        "question": [
+          "What did Predictive Optimization do in the last 7 days?"
+        ],
+        "sql": [
+          "SELECT operation_type, COUNT(*) AS operations, COUNT(DISTINCT catalog_name || '.' || schema_name || '.' || table_name) AS tables_touched FROM system.storage.predictive_optimization_operations_history WHERE start_time >= current_timestamp() - INTERVAL 7 DAYS AND operation_status = 'SUCCESSFUL' GROUP BY 1 ORDER BY operations DESC"
+        ]
+      }
+    ]
+  }
+}

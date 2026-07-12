@@ -1,0 +1,50 @@
+# Databricks App runtime config — everything here is an OPTIONAL override
+# with a working default. The one REQUIRED setting (the SQL warehouse) lives
+# in databricks.yml (variables.warehouse_id) and is injected below via
+# valueFrom, so this file needs no edit for it. In the deploy.sh flow the
+# `value:` entries are rewritten from customise.yaml — edit that file, not
+# this one.
+command:
+  - bash
+  - start.sh
+
+env:
+  - name: FINOPS_CUSTOMER_NAME
+    value: "Energy for All"
+
+  # Warehouse id, injected from the bundle's `sql-warehouse` resource binding
+  # (single source: variables.warehouse_id in databricks.yml). Never edit.
+  - name: DATABRICKS_WAREHOUSE_ID
+    valueFrom: sql-warehouse
+
+  # App-state store: "lakebase" (managed Postgres, default) or "uc".
+  - name: FINOPS_APP_STORE
+    value: "lakebase"
+  - name: FINOPS_LAKEBASE_INSTANCE
+    value: "finops-lakebase"
+
+  # The app's UC schema — used only when FINOPS_APP_STORE is "uc".
+  - name: FINOPS_APP_CATALOG
+    value: "main"
+  - name: FINOPS_APP_SCHEMA
+    value: "finops_cache"
+
+  # AUD = USD list price × this rate. Deploy-time setting.
+  - name: FINOPS_FX_AUD
+    value: "1.52"
+
+  # Feature flags — all on by default; flip per deployment as needed.
+  - name: FINOPS_FEATURE_GENIE
+    value: "true"
+  - name: FINOPS_FEATURE_AI_NARRATION
+    value: "true"
+  - name: FINOPS_FEATURE_DQM
+    value: "true"
+
+  # Genie space id, injected from the bundle-managed `genie-space` resource.
+  - name: GENIE_SPACE_ID
+    valueFrom: genie-space
+
+  # Claude endpoint for ai_narration.
+  - name: FINOPS_LLM_ENDPOINT
+    value: "databricks-claude-sonnet-4-6"

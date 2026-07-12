@@ -1,0 +1,11 @@
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.git/
+.DS_Store
+docs/
+frontend/node_modules/
+# frontend/src ships with the bundle: the SPA is built ON the Databricks Apps
+# container by start.sh — never locally.

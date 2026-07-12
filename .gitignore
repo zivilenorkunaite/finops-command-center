@@ -1,0 +1,20 @@
+# Local bundle/deploy state — never commit
+.databricks/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Frontend build artifacts (built on the app container, never locally)
+frontend/node_modules/
+frontend/dist/
+
+# OS noise
+.DS_Store
+
+# Local Claude Code project settings
+.claude/
+
+# Per-customer deployment values — local only, never publish
+customise.*.yaml

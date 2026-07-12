@@ -1,0 +1,38 @@
+# FinOps Command Center — deploy-time configuration.
+# This file is an OPTIONAL config source. Every value here can also be supplied
+# (and overridden) by the matching environment variable in app.yaml / the App
+# UI → Settings → Environment. Env always wins over this file.
+#
+# Precedence (highest first):
+#   1. Environment variable (FINOPS_FEATURE_*, GENIE_SPACE_ID, …)
+#   2. This config.yaml
+#   3. Built-in default
+
+
+# ---------------------------------------------------------------------------
+# Feature flags. Off ⇒ surface hidden in the UI AND endpoint inert (404).
+# The cost-attribution pages (Genie $, AI $) are always on — they call no model.
+# ---------------------------------------------------------------------------
+features:
+  # All on by default; flip per deployment as needed.
+  genie: true
+  ai_narration: true
+  dqm: true
+
+# Genie Space over the cost/usage tables.
+genie_space_id: ""
+
+# SQL warehouse for system-table reads.
+warehouse_id: ""
+
+# The app's own Unity Catalog home (workspace-scope table + Query Advisor
+# cache). Must be a UC catalog the app's identity can CREATE SCHEMA in.
+app_catalog: main
+app_schema: finops_cache
+
+# AUD FX rate: AUD = USD list price × fx_rate. Deploy-time setting — edit
+# and redeploy to change (shown in the UI next to the USD|AUD switch).
+fx_rate: 1.52
+
+# FMAPI Claude endpoint for ai_narration.
+llm_endpoint: databricks-claude-sonnet-4-6
