@@ -68,7 +68,7 @@ UC schema with `app_store: uc`.
 - Estate reads run on-behalf-of-user: what you see is exactly what your own
 Unity Catalog permissions allow. There is no service token; the app's own
 credentials touch only its state store (plus one metadata call — listing
-Lakebase instances to map their billing for the Apps tab).
+Lakebase instances/projects to map their billing for the Apps tab).
 - AUD figures are USD list price × the deploy-time `fx_aud` rate (shown next
 to the currency switch); the Account Console invoice is authoritative.
 

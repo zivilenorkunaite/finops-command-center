@@ -146,9 +146,18 @@ def _genie_space_costs(warehouse_id: str) -> list[dict[str, Any]]:
 # Allocation is hour-matched with a one-compute-hour floor — see
 # _obo_warehouse_attribution. Fully out-of-the-box: nothing app-side.
 # ---------------------------------------------------------------------------
+def _pg_project_of(res: dict[str, Any]) -> str:
+    """Project id out of an Autoscaling `postgres` app resource — its branch
+    field is the full path projects/<project_id>/branches/<branch_id>."""
+    branch = str(res.get("postgres", {}).get("branch") or "")
+    parts = branch.split("/")
+    return parts[1] if len(parts) >= 2 and parts[0] == "projects" else ""
+
+
 def _decl_keys(res: dict[str, Any]) -> list[str]:
     """Dedup keys for dedicatable declared resources (endpoints, vector
-    search, Lakebase instances, jobs) — used to detect multi-app declarations."""
+    search, Lakebase instances/projects, jobs) — used to detect multi-app
+    declarations."""
     if "serving_endpoint" in res:
         return [f"ep:{res['serving_endpoint'].get('name')}"]
     if "vector_search_endpoint" in res:
@@ -157,26 +166,37 @@ def _decl_keys(res: dict[str, Any]) -> list[str]:
         return [f"ep:{res['vector_search_index'].get('name')}"]
     if "database" in res:
         return [f"db:{res['database'].get('instance_name')}"]
+    if "postgres" in res:
+        return [f"db:{_pg_project_of(res)}"]
     if "job" in res:
         return [f"job:{res['job'].get('id')}"]
     return []
 
 
 def _lakebase_instance_costs(warehouse_id: str) -> dict[str, float]:
-    """Full month-to-date cost per Lakebase instance NAME, for apps that
-    declare a database binding. Billing identifies instances only by project
-    uuid; the name→uuid map comes from the Database Instances API read AS THE
-    APP (metadata of app resource bindings — instance creation emits no
-    workspace audit event, so there is no system-table path). Instances the
-    app's service principal can't see stay unmapped → their chips remain
+    """Full month-to-date cost per Lakebase label — Provisioned instance NAME
+    or Autoscaling PROJECT ID — for apps that declare a database/postgres
+    binding. Billing identifies both generations by uuid
+    (usage_metadata.project_id); the label→uuid map comes from the Database
+    Instances + Postgres Projects APIs read AS THE APP (metadata of app
+    resource bindings — no system-table path exists). Whatever the app's
+    service principal can't see stays unmapped → those chips remain
     "not attributable"."""
     from data.runtime import _app_client
 
+    uid_by_name: dict[str, str] = {}
     try:
         instances = list(_app_client().database.list_database_instances())
-        uid_by_name = {str(i.name): str(i.uid) for i in instances if i.name and i.uid}
+        uid_by_name.update({str(i.name): str(i.uid) for i in instances if i.name and i.uid})
     except Exception:
-        return {}
+        pass  # Provisioned API absent or empty — projects may still map
+    try:
+        resp = _app_client().api_client.do("GET", "/api/2.0/postgres/projects")
+        projects = resp.get("projects", resp) if isinstance(resp, dict) else resp
+        uid_by_name.update({str(pr.get("project_id")): str(pr.get("uid"))
+                            for pr in (projects or []) if pr.get("project_id") and pr.get("uid")})
+    except Exception:
+        pass  # Autoscaling API absent — instances may still map
     if not uid_by_name:
         return {}
     uid_list = ", ".join(f"'{_f_safe(u)}'" for u in uid_by_name.values())
@@ -498,6 +518,14 @@ def apps_cost_live(warehouse_id: str) -> dict[str, Any]:
                 out.append({"type": "database",
                             "label": f"{inst}/{d.get('database_name')}",
                             "usd": usd, "attribution": attr})
+            elif "postgres" in res:
+                # Autoscaling binding: branch = projects/<pid>/branches/<bid>.
+                pid = _pg_project_of(res)
+                usd, attr = _full_or_shared(f"db:{pid}", lakebase_usd.get(pid))
+                dbid = str(res["postgres"].get("database") or "").rsplit("/", 1)[-1]
+                out.append({"type": "database",
+                            "label": f"{pid}/{dbid}" if dbid else pid,
+                            "usd": usd, "attribution": attr})
             elif "secret" in res:
                 s = res["secret"]
                 out.append({"type": "secret", "label": f"{s.get('scope')}/{s.get('key')}", "usd": None, "attribution": None})
@@ -638,7 +666,7 @@ def apps_cost_live(warehouse_id: str) -> dict[str, Any]:
             "Visitors per app are not measurable: there is no system.apps schema and the apps audit service logs lifecycle events only (deploy/start/stop), not requests — so no visitor column is shown rather than an invented one.",
             "Asset attribution was checked, not assumed: genie-space figures ARE app-attributable (query_source.genie_space_id). Warehouse chips always show the SHARED total — the caller attribution below measures each app's true slice instead. Serving / vector-search endpoints, Lakebase instances and declared jobs are attributed at FULL cost (asterisked) only when EXACTLY ONE app declares them; declared by several apps ⇒ shared. Databricks-hosted pay-per-token endpoints (databricks-*) are always shared — they bill for everyone's tokens. Secrets and tables carry no attributable billing. The resource list reflects the app spec at its last create/update event.",
             "OBO warehouse compute IS attributable (the card below): every statement an app submits with a forwarded user token is audited as databrickssql.commandSubmit with identity_metadata.acting_resource = the app's OAuth integration and the statement id. Allocation is HOUR-MATCHED: each billed warehouse-hour is split by that hour's task-time shares (denominator floored at one compute-hour, so a caller with seconds of work in a near-idle hour is charged seconds' worth), and an app is charged only in hours where it actually ran statements — idle burn stays unattributed. Requires VERBOSE audit logging; run_as stays the human, so permissions are untouched. Serving calls made on behalf of users remain unattributable (the serving data plane records only the human requester) — dedicated endpoints are the answer there.",
-            "Full-cost assets (asterisked): a serving/vector-search endpoint, Lakebase instance or job declared by exactly one app carries its FULL month-to-date cost on that app — billing cannot split these by caller, so the figure overstates whenever the resource is also used from outside apps. Lakebase name→billing mapping is read as the app's own service principal; instances it cannot see stay unattributed.",
+            "Full-cost assets (asterisked): a serving/vector-search endpoint, Lakebase instance/project or job declared by exactly one app carries its FULL month-to-date cost on that app — billing cannot split these by caller, so the figure overstates whenever the resource is also used from outside apps. Lakebase label→billing mapping (Provisioned instances + Autoscaling projects) is read as the app's own service principal; whatever it cannot see stays unattributed.",
             "The caller-attribution card covers BOTH app modes: on-behalf-of statements via the audit identity chain, and service-principal statements straight from query history (job runs excluded). SP callers appear unnamed until labeled — jobs' and other services' principals can show up too, so only label the ones you recognise as apps.",
             "Best-practice flags follow docs.databricks.com → Databricks Apps → Best practices: stop always-on apps that are no longer used, and prefer managed resource bindings over hard-coded credentials.",
         ],

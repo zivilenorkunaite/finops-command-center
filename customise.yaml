@@ -11,7 +11,8 @@
 #   warehouse_id      -> --var warehouse_id      (bundle → sql-warehouse
 #                        binding → valueFrom in app.yaml; never written here)
 #   app_store         -> FINOPS_APP_STORE        (lakebase | uc — app state)
-#   lakebase_instance -> FINOPS_LAKEBASE_INSTANCE (Lakebase instance name)
+#   lakebase_instance -> --var lakebase_instance  (Lakebase PROJECT id)
+#                        + FINOPS_LAKEBASE_INSTANCE  (legacy Provisioned fallback)
 #   app_catalog       -> FINOPS_APP_CATALOG      (UC home, app_store: uc only)
 #   app_schema        -> FINOPS_APP_SCHEMA       (UC home, app_store: uc only)
 #   fx_aud            -> FINOPS_FX_AUD           (AUD = USD × rate; deploy-time
@@ -41,8 +42,9 @@ warehouse_id: ""
 #   tag_exclusions      (operator-excluded blanket tag keys)
 #   app_identity_map    (operator labels for app caller identities)
 #
-#   lakebase (default): a Lakebase managed-Postgres instance CREATED BY THE
-#     BUNDLE (databricks.yml); the app connects as its own service principal.
+#   lakebase (default): a Lakebase managed-Postgres PROJECT created by the
+#     bundle (databricks.yml — Autoscaling: project + branch + endpoint); the
+#     app connects as its own service principal via the injected PG* env.
 #     Nothing is created in Unity Catalog.
 #   uc: Delta tables in <app_catalog>.<app_schema>. The app's service
 #     principal needs USE CATALOG + CREATE SCHEMA on the catalog. On

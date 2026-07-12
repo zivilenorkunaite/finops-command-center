@@ -18,6 +18,9 @@ env:
     valueFrom: sql-warehouse
 
   # App-state store: "lakebase" (managed Postgres, default) or "uc".
+  # With the Autoscaling binding the app connects via the injected PG* env;
+  # FINOPS_LAKEBASE_INSTANCE is only the legacy fallback for the Provisioned
+  # variant (docs/DEPLOYMENT.md §2), where it must match the instance name.
   - name: FINOPS_APP_STORE
     value: "lakebase"
   - name: FINOPS_LAKEBASE_INSTANCE

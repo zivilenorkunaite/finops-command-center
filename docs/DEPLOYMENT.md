@@ -5,8 +5,9 @@ Deployment is a Databricks Asset Bundle end to end. Pick ONE option:
 * **Option 1 — from the workspace UI** (Git folder + bundle panel, no local tooling) — preferred.
 * **Option 2 — local CLI** via `./deploy.sh`.
 
-Both create the same four resources: the **App**, the **Genie space**, the
-**Lakebase instance** (app-state store) and the **warehouse binding**. The
+Both create the same resources: the **App**, the **Genie space**, the
+**Lakebase project** (app-state store: project + branch + endpoint) and the
+**warehouse binding**. The
 React frontend always builds on the app container — never on your machine.
 
 ### Repo files at a glance
@@ -31,7 +32,7 @@ React frontend always builds on the app container — never on your machine.
 |---|---|
 | Workspace access with **Git folder** creation (Option 1) or a CLI login (Option 2) | source of the bundle |
 | Entitlement to **create Databricks Apps** in the workspace | the `apps` bundle resource |
-| Entitlement to **create Lakebase database instances** | the `database_instances` resource (default app store) |
+| Entitlement to **create Lakebase (Postgres) projects** | the `postgres_projects` resource (default app store) |
 | Ability to **create Genie spaces** | the `genie_spaces` resource |
 | **CAN_USE** on the target SQL warehouse | the app's warehouse binding |
 | Serverless compute enabled in the workspace (Option 1 only) | the workspace bundle runner requires it |
@@ -41,7 +42,8 @@ React frontend always builds on the app container — never on your machine.
 
 Estate reads run **on-behalf-of the signed-in viewer** — the app's service
 principal never reads estate tables (its only estate touch is listing
-Lakebase instances, metadata used to map their billing on the Apps tab), and
+Lakebase instances/projects, metadata used to map their billing on the Apps
+tab), and
 deploys never create or modify table grants. Each viewer therefore needs:
 
 ```sql
@@ -75,8 +77,10 @@ rest of the app is unaffected.
 
 ### The app-state store
 
-* `lakebase` (default): nothing to prepare — the bundle creates the instance
-  and provisions the app's Postgres role.
+* `lakebase` (default): nothing to prepare — the bundle creates the
+  Lakebase project (with its branch and endpoint) and the app binding
+  provisions the app SP's Postgres role; connection details reach the app
+  as injected `PG*` env vars.
 * `uc`: an account/metastore admin must pre-create a catalog the app's
   service principal can use:
   ```sql
@@ -101,65 +105,50 @@ app's `sql-warehouse` resource binding and app.yaml reads it back with
 `GENIE_SPACE_ID` from the `genie-space` binding. Never edit those two
 `valueFrom` env entries.
 
-**Shared workspaces:** `app_name` and `lakebase_instance` are
-workspace-global names. If another deployment of this bundle already exists
-in the workspace, reusing its instance name fails app creation with
-`PERMISSION_DENIED — User needs MANAGE permission on the resource` (binding
-a database instance requires managing it). Pick unique values for both —
-in the workspace flow that is three edits: `variables.app_name.default` and
-`variables.lakebase_instance.default` in databricks.yml, plus the matching
-`FINOPS_LAKEBASE_INSTANCE` in app.yaml.
+**Shared workspaces:** `app_name` and `lakebase_instance` (the Lakebase
+project id) are workspace-global names. If another deployment of this
+bundle already exists in the workspace, reusing them collides — pick unique
+values for both in databricks.yml (`variables.app_name.default`,
+`variables.lakebase_instance.default`).
 
-**Lakebase Autoscaling workspaces:** this bundle defaults to the
-*Provisioned* pairing (`database_instances` resource + the app's `database`
-binding). On workspaces running Lakebase **Autoscaling**
-(projects/branches), that pairing creates a *project* under the hood and
-the `database` binding's MANAGE check fails with the same
-`PERMISSION_DENIED` — even for the project's owner, no matter how long you
-wait. On such workspaces swap to the Autoscaling pairing in databricks.yml
-(the app connects identically either way — it reads the injected `PG*` env
-vars):
+**Lakebase generations:** this bundle uses **Lakebase Autoscaling**
+(`postgres_projects` + `postgres_branches` + `postgres_endpoints`, with the
+app's `postgres` binding) — the current Lakebase model; the app reads its
+connection from the injected `PG*` env vars. Three encoded gotchas, already
+handled in databricks.yml: the branch id must not be `production` (every
+project auto-provisions that branch), the endpoint carries
+`replace_existing: true` (read-write endpoints cannot be deleted, so
+recreation would otherwise fail), and the app binding's `database` is the
+full resource path ending in the database RESOURCE id
+(`…/databases/databricks-postgres`, hyphens — the Postgres-internal name is
+`databricks_postgres`). Do NOT add a `permissions:` block to
+`postgres_projects` — a current CLI bug (databricks/cli#4818) fails those
+deploys; the deployer owns the project it creates, which satisfies the app
+binding's MANAGE-on-project check.
+
+On an older workspace with only **Lakebase Provisioned**, swap the three
+`postgres_*` blocks for a provisioned instance and the app binding to the
+`database` shape (its `FINOPS_LAKEBASE_INSTANCE` env in app.yaml must match
+the instance name):
 
 ```yaml
 resources:
-  postgres_projects:
-    finops_pg:
-      project_id: ${var.lakebase_instance}
-      display_name: ${var.lakebase_instance}
-      pg_version: 17
-  postgres_branches:
-    finops_branch:
-      parent: ${resources.postgres_projects.finops_pg.id}
-      # Defaults to "finops" (variables.lakebase_branch) — any id EXCEPT
-      # "production": every new project auto-provisions a default branch
-      # with that name, so declaring it collides ("branch already exists").
-      branch_id: ${var.lakebase_branch}
-      no_expiry: true
-  postgres_endpoints:
-    finops_endpoint:
-      parent: ${resources.postgres_branches.finops_branch.id}
-      endpoint_id: primary
-      endpoint_type: ENDPOINT_TYPE_READ_WRITE
-      autoscaling_limit_min_cu: 0.5
-      autoscaling_limit_max_cu: 2
+  database_instances:
+    finops_lakebase:
+      name: ${var.lakebase_instance}
+      capacity: CU_1
 ```
-
-replacing the `database_instances` block, and swap the app's `lakebase`
-binding to:
 
 ```yaml
         - name: lakebase
-          postgres:
-            branch: ${resources.postgres_branches.finops_branch.id}
-            database: databricks_postgres
+          database:
+            instance_name: ${resources.database_instances.finops_lakebase.name}
+            database_name: databricks_postgres
             permission: CAN_CONNECT_AND_CREATE
 ```
 
-Do NOT declare a `permissions:` block on `postgres_projects` — a current
-CLI bug (databricks/cli#4818) fails those deploys; the deployer owns the
-project it creates, which satisfies the app binding's MANAGE-on-project
-check. Fallback if Lakebase is unavailable entirely: the UC store — remove
-the Lakebase resources and binding, set `FINOPS_APP_STORE: "uc"` +
+Fallback if Lakebase is unavailable entirely: the UC store — remove the
+Lakebase resources and binding, set `FINOPS_APP_STORE: "uc"` +
 `FINOPS_APP_CATALOG`, and grant the app SP `USE CATALOG, CREATE SCHEMA`
 after the first deploy.
 
@@ -170,7 +159,7 @@ need. Option 1 edits the file listed; Option 2 sets the `customise.yaml` key
 | Setting (default) | Option 1 — edit | `customise.yaml` key |
 |---|---|---|
 | App name (`finops-command-center`) | `databricks.yml` → `variables.app_name.default` | — (`--app` flag) |
-| Lakebase instance name (`finops-lakebase`) | `databricks.yml` → `variables.lakebase_instance.default` **and** `app.yaml` → `FINOPS_LAKEBASE_INSTANCE` (must match — the binding's `valueFrom` yields the Postgres host, not the name) | `lakebase_instance` (sets both) |
+| Lakebase project id (`finops-lakebase`) | `databricks.yml` → `variables.lakebase_instance.default` (on the Provisioned variant, `app.yaml` → `FINOPS_LAKEBASE_INSTANCE` must also match) | `lakebase_instance` |
 | Customer label (display + Genie space title) | `app.yaml` → `FINOPS_CUSTOMER_NAME`; title: `databricks.yml` → `variables.customer_name.default` | `customer_name` |
 | App store (`lakebase`) | `app.yaml` → `FINOPS_APP_STORE` (+ `FINOPS_LAKEBASE_INSTANCE`, or `FINOPS_APP_CATALOG`/`FINOPS_APP_SCHEMA` for `uc`) | `app_store` etc. |
 | Feature flags (all `true`) | `app.yaml` → `FINOPS_FEATURE_GENIE` / `_AI_NARRATION` / `_DQM` | `features.*` |

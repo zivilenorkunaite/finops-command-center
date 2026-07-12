@@ -57,10 +57,10 @@ variables:
     default: databricks-claude-sonnet-4-6
   lakebase_instance:
     description: >-
-      Lakebase (managed Postgres) instance holding the app's own state —
+      Lakebase (managed Postgres) PROJECT ID holding the app's own state —
       workspace scope, workspace universe and the Query Advisor cache.
-      Created by this bundle. Only used when app_store is "lakebase"
-      (the default in customise.yaml).
+      Created by this bundle (Autoscaling: project + branch + endpoint).
+      Only used when app_store is "lakebase" (the default in customise.yaml).
     default: finops-lakebase
   lakebase_branch:
     description: >-
@@ -89,17 +89,36 @@ workspace:
 # declaratively from customise.yaml by deploy.sh in the local flow.
 # ---------------------------------------------------------------------------
 resources:
-  # App-state store (app_store: lakebase, the default) — smallest capacity;
-  # the app's tables are tiny. The app connects as its own service principal.
-  database_instances:
-    finops_lakebase:
-      name: ${var.lakebase_instance}
-      capacity: CU_1
-      # Explicit MANAGE for the deployer: the app's `database` binding is
-      # permission-checked against the deploying user at app create time.
-      permissions:
-        - level: CAN_MANAGE
-          user_name: ${workspace.current_user.userName}
+  # App-state store — Lakebase AUTOSCALING (projects/branches/endpoints).
+  # The project auto-provisions a default "production" branch; the app binds
+  # its own branch below. The app connects as its own service principal via
+  # the injected PG* env vars. No permissions block here on purpose: the
+  # deployer owns the project it creates (satisfies the app binding's
+  # MANAGE-on-project check), and declaring permissions on postgres_projects
+  # currently fails deploys (databricks/cli#4818).
+  postgres_projects:
+    finops_pg:
+      project_id: ${var.lakebase_instance}
+      display_name: ${var.lakebase_instance}
+      pg_version: 17
+
+  postgres_branches:
+    finops_branch:
+      parent: ${resources.postgres_projects.finops_pg.id}
+      # Any id EXCEPT "production" (the auto-provisioned default branch).
+      branch_id: ${var.lakebase_branch}
+      no_expiry: true
+
+  postgres_endpoints:
+    finops_endpoint:
+      parent: ${resources.postgres_branches.finops_branch.id}
+      endpoint_id: primary
+      endpoint_type: ENDPOINT_TYPE_READ_WRITE
+      autoscaling_limit_min_cu: 0.5
+      autoscaling_limit_max_cu: 2
+      # Adopt the branch's existing read-write endpoint when one exists
+      # (RW endpoints cannot be deleted, so recreation would otherwise fail).
+      replace_existing: true
 
   # The Genie space over the cost system tables — fully bundle-managed from
   # the versioned definition. Viewers ask it questions on their own
@@ -149,12 +168,15 @@ resources:
             space_id: ${resources.genie_spaces.finops_genie.id}
             permission: CAN_RUN
         # App-state database: provisions the app SP's Postgres role on the
-        # Lakebase instance above. Referencing the resource (not the var)
-        # makes the instance a dependency, so it exists before the app binds.
+        # Lakebase branch above. Referencing the resource (not a var) makes
+        # the branch (and its project) a dependency, so they exist before
+        # the app binds. Connection details reach the app as PG* env vars.
         - name: lakebase
-          database:
-            instance_name: ${resources.database_instances.finops_lakebase.name}
-            database_name: databricks_postgres
+          postgres:
+            branch: ${resources.postgres_branches.finops_branch.id}
+            # Full resource path required, using the database RESOURCE id
+            # (hyphens) — the Postgres-internal name is databricks_postgres.
+            database: ${resources.postgres_branches.finops_branch.id}/databases/databricks-postgres
             permission: CAN_CONNECT_AND_CREATE
 
 # ---------------------------------------------------------------------------

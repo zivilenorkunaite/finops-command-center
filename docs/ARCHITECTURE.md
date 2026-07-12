@@ -39,15 +39,17 @@ tables it needs).
     also carries SP OAuth env vars.
   * **App-state I/O** runs as the **app's own service principal** — viewers
     need no grants on the app's store. The SP's one estate touch: listing
-    Lakebase instances (metadata) to map their billing on the Apps tab.
+    Lakebase instances/projects (metadata) to map their billing on the Apps
+    tab.
 * `data/genie_client.py` — Genie Conversation API + query-result fetch;
   answers stream over SSE with keepalives (long scans take minutes).
 * `data/config.py` — env > config.yaml > defaults.
 
 **App-state store** (the only writes) — picked by `app_store`:
 
-* `lakebase` (default): a Lakebase managed-Postgres instance **created by the
-  bundle**; the app connects as its SP (OAuth token as the Postgres
+* `lakebase` (default): a Lakebase managed-Postgres **Autoscaling project**
+  (project + branch + endpoint) **created by the bundle**; the app connects
+  as its SP via the injected `PG*` env vars (OAuth token as the Postgres
   password). Nothing is created in Unity Catalog.
 * `uc`: Delta tables in `app_catalog`.`app_schema`, written with the app's
   credentials (the SP needs USE CATALOG + CREATE SCHEMA there).
@@ -77,9 +79,9 @@ access-rule definitions, and the theme switch.
 warehouse binding + the Genie space as a `genie_spaces` resource
 (`resources/finops_genie_space.json` — neutral filename on purpose; the
 `.geniespace.json` suffix would materialise as a Genie node and break app
-snapshots, id injected into the app via `valueFrom`) + Lakebase
-`database_instances` resource + the app's `database` binding (provisions the
-SP's Postgres role). No Unity Catalog table grants are created or modified at
+snapshots, id injected into the app via `valueFrom`) + Lakebase Autoscaling
+`postgres_projects`/`postgres_branches`/`postgres_endpoints` resources + the
+app's `postgres` binding (provisions the SP's Postgres role). No Unity Catalog table grants are created or modified at
 deploy time. Deploy either with `deploy.sh` (= `bundle deploy` + `bundle run
 finops`) or entirely from the workspace bundle panel in a Git folder — no
 local tooling; `presets.source_linked_deployment: false` keeps the app's
