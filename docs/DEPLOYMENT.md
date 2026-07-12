@@ -173,7 +173,9 @@ need. Option 1 edits the file listed; Option 2 sets the `customise.yaml` key
 1. Push this repo to your Git provider (GitHub / GitLab / Azure DevOps …).
 2. In the target workspace: **Workspace → Create → Git folder**, clone the repo.
 3. Edit the configuration values (section 2) in the workspace editor and
-   commit them.
+   commit them — on a small workspace branch, so pulling upstream later
+   doesn't reset `variables.warehouse_id.default` (and your unique names)
+   back to the repo defaults.
 4. Open the folder — the **bundle panel** appears (it detects
    `databricks.yml`). Pick target **dev** and press **Deploy**. The dialog
    shows the CLI version the workspace runs; it must be ≥ v1.3.0 (current
