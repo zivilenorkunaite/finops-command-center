@@ -62,6 +62,12 @@ variables:
       Created by this bundle. Only used when app_store is "lakebase"
       (the default in customise.yaml).
     default: finops-lakebase
+  lakebase_branch:
+    description: >-
+      Branch id for the Lakebase AUTOSCALING pairing (docs/DEPLOYMENT.md §2).
+      Any id except "production" — every new project auto-provisions a
+      default branch with that name, so declaring it collides.
+    default: finops
 
 # Deploy under the current user's workspace files by default; the app's
 # source_code_path points at this path's /files copy.

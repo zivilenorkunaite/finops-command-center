@@ -130,10 +130,10 @@ resources:
   postgres_branches:
     finops_branch:
       parent: ${resources.postgres_projects.finops_pg.id}
-      # Any id EXCEPT "production": every new project auto-provisions a
-      # default branch with that name, so declaring it collides
-      # ("branch already exists").
-      branch_id: finops
+      # Defaults to "finops" (variables.lakebase_branch) — any id EXCEPT
+      # "production": every new project auto-provisions a default branch
+      # with that name, so declaring it collides ("branch already exists").
+      branch_id: ${var.lakebase_branch}
       no_expiry: true
   postgres_endpoints:
     finops_endpoint:
