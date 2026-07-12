@@ -110,6 +110,18 @@ in the workspace flow that is three edits: `variables.app_name.default` and
 `variables.lakebase_instance.default` in databricks.yml, plus the matching
 `FINOPS_LAKEBASE_INSTANCE` in app.yaml.
 
+**Lakebase Autoscaling workspaces:** this bundle uses the *Provisioned*
+pairing (`database_instances` resource + the app's `database` binding). On
+workspaces running Lakebase **Autoscaling** (projects/branches), the same
+bundle creates a *project* under the hood and the `database` binding's
+MANAGE check then fails with the same `PERMISSION_DENIED` — even for the
+project's owner, no matter how long you wait. Until this repo supports the
+Autoscaling pairing (`postgres_projects` + app `postgres` binding), deploy
+on such workspaces with the UC store instead: remove the
+`database_instances` block and the app's `lakebase` binding from
+databricks.yml, set `FINOPS_APP_STORE: "uc"` + `FINOPS_APP_CATALOG`, and
+grant the app SP `USE CATALOG, CREATE SCHEMA` after the first deploy.
+
 **Everything else is optional** — working defaults, override only what you
 need. Option 1 edits the file listed; Option 2 sets the `customise.yaml` key
 (deploy.sh writes it into the file for you):
