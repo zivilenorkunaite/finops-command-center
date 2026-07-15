@@ -173,18 +173,21 @@ def _f(v: Any) -> float:
         return 0.0
 
 
-# Short-TTL in-process memo for expensive shared reads. Tabs fire many
-# endpoints that re-scan billing/privileges identically. NOTE: entries are
-# shared across viewers — fine for this single-operator deployment, but a
-# multi-tenant estate with differing viewer permissions would need per-viewer
-# keys.
+# Short-TTL in-process memo for expensive reads. Tabs fire many endpoints
+# that re-scan billing/privileges identically. Entries are keyed PER VIEWER:
+# most memoized functions read the estate on-behalf-of-user, so one viewer's
+# result must never be served to another (their permissions may differ).
+# App-state reads pay a slightly colder cache for the same guarantee. Keys
+# lead with the function name — prefix purges (_purge_memo) rely on it and
+# so invalidate every viewer's entry at once, which is what a state change
+# requires.
 _MEMO: dict[str, tuple[float, Any]] = {}
 
 
 def _ttl_cache(seconds: int = 600):
     def deco(fn):
         def wrap(*a, **k):
-            key = fn.__name__ + repr(a) + repr(sorted(k.items()))
+            key = f"{fn.__name__}|{_viewer_principal()}|" + repr(a) + repr(sorted(k.items()))
             hit = _MEMO.get(key)
             if hit and time.time() - hit[0] < seconds:
                 return hit[1]
