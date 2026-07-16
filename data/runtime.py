@@ -200,7 +200,11 @@ def _ttl_cache(seconds: int = 600):
 
 
 def _sql_str(v: Any) -> str:
-    return str(v or "").replace("\\", "\\\\").replace("'", "''")
+    """Escape a value for inlining into a Databricks SQL single-quoted
+    literal. Quotes are BACKSLASH-escaped: DBSQL parses 'a''b' as two
+    adjacent literals and silently concatenates them to ab (verified live),
+    so ANSI ''-doubling corrupts any value containing a quote."""
+    return str(v or "").replace("\\", "\\\\").replace("'", "\\'")
 
 
 def _sql_num(v: Any) -> str:

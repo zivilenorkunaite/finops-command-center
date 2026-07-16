@@ -71,6 +71,13 @@ def preflight(warehouse_id: str) -> dict[str, Any]:
             checks.append({"name": store_name, "ok": False, "error": e.detail})
     else:
         try:
+            # Parity with the lakebase probe (_pg_ensure + SELECT 1): actually
+            # ensure the store's DDL, not just list it — a metastore that can't
+            # create managed tables (e.g. no root storage credential) must turn
+            # this check red instead of reporting healthy while every write fails.
+            from data.cache import _uc_cache_ensure
+
+            _uc_cache_ensure(warehouse_id)
             _run(warehouse_id, f"SHOW TABLES IN {_schema_fqn()}", "app schema", as_app=True)
             checks.append({"name": f"{'.'.join(_app_schema())} (app credentials)", "ok": True, "error": None})
         except LiveError as e:

@@ -85,7 +85,16 @@ def _cache_table_fqn() -> str:
     return f"{_schema_fqn()}.app_cache"
 
 
+_UC_CACHE_READY = False
+
+
 def _uc_cache_ensure(warehouse_id: str) -> None:
+    """Idempotent DDL, once per process (mirrors _pg_ensure/_PG_READY) —
+    unguarded, every cache read/write/mark paid 3 extra warehouse
+    statements per call."""
+    global _UC_CACHE_READY
+    if _UC_CACHE_READY:
+        return
     _run(warehouse_id, f"CREATE SCHEMA IF NOT EXISTS {_schema_fqn()}", "app schema", as_app=True)
     _run(warehouse_id, f"""
         CREATE TABLE IF NOT EXISTS {_cache_table_fqn()} (
@@ -96,6 +105,7 @@ def _uc_cache_ensure(warehouse_id: str) -> None:
              "app_cache", as_app=True)
     except LiveError:
         pass
+    _UC_CACHE_READY = True
 
 
 def _cache_rows(warehouse_id: str, principals: tuple[str, ...]) -> dict[tuple[str, str], dict[str, Any]]:
